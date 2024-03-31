@@ -5,5 +5,5 @@
 <p align="center"> Authors: Nehal Alaa, Nour marawan, Mai Torkey, and  Ahmed Gomaa. </p>
 
 <p align="center">
-<img src="Hamaki LOGO.PNG">
+  <img src="Hamaki LOGO.PNG" width="200" height="100">
 </p>
