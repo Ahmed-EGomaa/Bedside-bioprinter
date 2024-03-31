@@ -1,0 +1,77 @@
+import cv2 as cv
+import numpy as np
+from pyzbar.pyzbar import decode
+
+# Function to draw text with background outline
+def textBGoutline(img, text, position, fonts=cv.FONT_HERSHEY_SIMPLEX, scaling=1, text_color=(0, 255, 0),
+                  thickness=1, bg_color=(0, 0, 0)):
+    img_h, img_w = img.shape[:2]
+    x, y = position
+    (w, h), p = cv.getTextSize(text, fonts, scaling, thickness)
+    cv.rectangle(img, (x - p, y + p), (x + w + p, y - h - p), bg_color, -1)
+    cv.rectangle(img, (x - p, y + p), (x + w + p, y - h - p), text_color, thickness, cv.LINE_AA)
+    cv.putText(img, text, position, fonts, scaling, text_color, thickness, cv.LINE_AA)
+
+# Function to track speed based on object movement using Lucas-Kanade optical flow
+def track_speed(prev_frame, current_frame, prev_points):
+    lk_params = dict(winSize=(20, 20),
+                 maxLevel=4,
+                 criteria=(cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, 10, 0.01))
+    current_points, status, _ = cv.calcOpticalFlowPyrLK(prev_frame, current_frame, prev_points, None, **lk_params)
+    valid_current_points = current_points[status == 1]
+    valid_prev_points = prev_points[status == 1]
+    displacement = np.sqrt(np.sum(np.square(valid_current_points - valid_prev_points), axis=1))
+    speed = np.mean(displacement)
+    return speed, valid_current_points
+
+cap = cv.VideoCapture(0)
+
+ret, prev_frame = cap.read()
+prev_frame_gray = cv.cvtColor(prev_frame, cv.COLOR_BGR2GRAY)
+prev_points = None
+speed = None
+
+while True:
+    ret, frame = cap.read()
+
+    if not ret:
+        break
+
+    frame_gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+
+    # QR code detection
+    decoded_objs = decode(frame_gray)
+    qr_detected = False
+    qr_center = None
+
+    for obj in decoded_objs:
+        if obj.type == 'QRCODE':
+            qr_detected = True
+            x, y, w, h = obj.rect
+            qr_center = (x + w // 2, y + h // 2)
+            cv.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            textBGoutline(frame, f'QR Detected', (x, y - 10), scaling=0.5, text_color=(0, 255, 0))
+
+    # Track speed using optical flow if QR code is detected
+    if qr_detected:
+        if prev_points is not None:
+            speed, current_points = track_speed(prev_frame_gray, frame_gray, prev_points)
+            if len(current_points) > 0:
+                x, y, w, h = cv.boundingRect(current_points.astype(np.int32))
+                cv.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+
+                qr_distance = np.sqrt((x - qr_center[0]) ** 2 + (y - qr_center[1]) ** 2)
+                if qr_distance > 50:  # Change this threshold as needed
+                    textBGoutline(frame, f'Speed: {speed:.2f} pixels/frame', (30, 30), scaling=0.6, text_color=(255, 0, 0))
+
+        prev_frame_gray = frame_gray.copy()
+        prev_points = cv.goodFeaturesToTrack(prev_frame_gray, maxCorners=100, qualityLevel=0.3, minDistance=7,
+                                             blockSize=7)
+
+    cv.imshow('QR Optical Flow Bounding Box Speed Tracker', frame)
+
+    if cv.waitKey(1) & 0xFF == ord('q'):
+        break
+
+cap.release()
+cv.destroyAllWindows()
