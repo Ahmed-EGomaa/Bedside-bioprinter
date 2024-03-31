@@ -1,0 +1,772 @@
+import cv2 as cv
+import numpy as np
+from PyQt5.QtWidgets import QApplication, QSpinBox, QMainWindow, QScrollBar, QLabel, QPushButton, QFileDialog, QWidget,QVBoxLayout,QCheckBox, QVBoxLayout
+from PyQt5.QtCore import Qt, QTimer, QObject, pyqtSignal
+from PyQt5.QtGui import QImage, QPixmap , QFont
+import sys
+# from keras.models import load_model
+import os
+import threading
+import serial
+import math
+from pyzbar.pyzbar import decode
+import pyzbar
+
+class SerialThread(QObject):
+    data_received = pyqtSignal(str)
+
+    def __init__(self, port='/dev/cu.usbserial-1410'):
+        super().__init__()
+        self.port = port
+        self.running = False
+        self.arduino = None
+
+    def start_serial(self):
+        self.running = True
+        self.arduino = serial.Serial(self.port, 115200, timeout=1)
+        while self.running:
+            if self.arduino:
+                try:
+                    response = self.arduino.readline().rstrip(b'\r\n').decode('utf-8')
+                    self.data_received.emit(response)
+                    # print(response)
+                except serial.SerialException as e:
+                    print(f"SerialException: {e}")
+            else:
+                break
+
+    def stop_serial(self):
+        self.running = False
+        if self.arduino:
+            self.arduino.close()
+
+class Window(QMainWindow):
+    def __init__(self):
+
+        super().__init__()
+
+        # self.model = load_model("keras_Model.h5", compile=False)
+
+        # self.class_names = open("labels.txt", "r").readlines()
+
+        self.setWindowTitle("Bio Printer")
+        self.setGeometry(100, 100, 1200, 1000)
+        # self.setStyleSheet("background : #f6f4db;")
+
+        self.slicerlogolabel = QLabel(self)
+        self.slicerlogolabel.setGeometry(50, 50, 150, 150)  # Adjust the geometry as needed
+        self.pixmap = QPixmap("/Users/nihal/Library/Containers/ru.keepcoder.Telegram/Data/tmp/IMAGE 2024-01-21 16:21:11.jpg")
+        self.slicerlogolabel.setPixmap(self.pixmap.scaled(self.slicerlogolabel.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+    
+        self.RDIlogolabel = QLabel(self)
+        self.RDIlogolabel.setGeometry(1000, 50, 150, 150)  # Adjust the geometry as needed
+        self.pixmap = QPixmap("/Users/nihal/Downloads/Logopit_1668882116556-600x600.jpg")
+        self.RDIlogolabel.setPixmap(self.pixmap.scaled(self.RDIlogolabel.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+
+        self.image_label = QLabel(self)
+        self.image_label.setGeometry(50, 200, 300, 300)
+
+        self.font1 = QFont()
+        self.font1.setBold(True)
+        self.font1.setPointSize(32)
+        self.font2 = QFont()
+        self.font2.setBold(True)
+        self.font2.setPointSize(17)
+        self.font3 = QFont()
+        self.font3.setBold(True)
+        self.font3.setPointSize(18)
+
+        self.line1_label = QLabel("DIY Bio Printer", self)
+        self.line1_label.setGeometry(500, 50, 350, 50)
+        self.line1_label.setFont(self.font1)
+
+        self.text = QLabel('capture your injury', self)
+        self.text.setGeometry(100, 600, 600, 100)
+        self.text.setFont(self.font3)
+        # self.line2_label = QLabel("Authors: Mostafa Kamal Eldin, Nehal Alaa, Nancy Khalaf, , Huda Mohammed, Ahmed Gomaa", self)
+        # self.line2_label.setGeometry(230, 100, 740, 100)
+        # self.line2_label.setFont(self.font2)
+        # self.AItext=""
+        # self.text = QLabel(self.AItext, self)
+        # self.text.setGeometry(100, 600, 600, 100)
+        # self.text.setFont(self.font3)
+
+        # self.link = QLabel('<a href="https://github.com/Ahmed-EGomaa/MNN-Slicer"> MNN github Text</a>', self)
+        # self.link.setOpenExternalLinks(True)
+        # self.link.setGeometry(100, 650, 600, 100)
+        # self.link.setFont(self.font3)
+
+        # self.text1 = QLabel("* for the pump to be continously on, pump pressure =1 *", self)
+        # self.text1.setGeometry(100, 700, 600, 100)
+        # self.text1.setFont(self.font2)
+
+        #linestep scrollbar setup 
+        #linstep controls distance between each line, subsequently controlling num of lines  
+        self.scrollbar = QScrollBar(self)
+        self.scrollbar.setGeometry(450, 250, 30, 200)
+        self.scrollbar.setRange(1, 200)
+        self.scrollbar.setStyleSheet("background : #840720;")
+        self.scrollbar.valueChanged.connect(self.update_linestep)
+        self.label = QLabel("line step Value: 20", self)
+        self.label.setGeometry(500, 300, 300, 80)
+        self.label.setWordWrap(True)
+        self.linesstep=200
+        
+
+        #theshold scrollbar setup 
+        #threshold controls masking od desired shape
+        #this program can handle both binary and non binary images 
+        self.threshscrollbar = QScrollBar(self)
+        self.threshscrollbar.setGeometry(750, 250, 30, 200)
+        self.threshscrollbar.setRange(25, 250)  # Adjust the range according to your needs
+        self.threshscrollbar.setStyleSheet("background : #011627;")
+        self.threshscrollbar.valueChanged.connect(self.update_threshold)
+        self.threshold_label = QLabel("Threshold Value: 125", self)
+        self.threshold_label.setGeometry(800, 300, 300, 80)
+        self.threshold_label.setWordWrap(True)
+        self.threshvalue=0
+
+        # button for image upload from desktop
+        self.capture_healthy = QPushButton("capture healthy skin", self)
+        self.capture_healthy.setGeometry(400, 500, 145, 45)
+        self.capture_healthy.clicked.connect(self.capture_image)
+
+    
+        self.capture_injury = QPushButton("capture injury", self)
+        self.capture_injury.setGeometry(400, 550, 145, 45)
+        self.capture_injury.clicked.connect(self.capture_injury_image)
+
+        #button for printing only one random line to test the program first
+        self.tryline=False # intailized as False and changes once user clicks the button
+        self.tryoneline = QPushButton("try 1 line", self)
+        self.tryoneline.setGeometry(550, 500, 145, 45)
+        # self.tryoneline.clicked.connect(self.tryonelineaction)
+
+        # start button when clicked printing starts and data is sent to arduino
+        self.start = False # intailized as False and changes once user clicks the button
+        self.start_button = QPushButton("Start", self)
+        self.start_button.setGeometry(850, 500, 145, 45)
+        self.start_button.clicked.connect(self.start_action)
+
+        #pause/resume
+        # self.last_response_before_pause = ""
+        self.paused = False
+        self.printing=True
+        self.pause_resume_button = QPushButton("Pause", self)
+        self.pause_resume_button.setGeometry(700, 550, 145, 45)
+        self.pause_resume_button.clicked.connect(self.toggle_pause_resume)
+
+        #reset
+        self.reset=False
+        self.reset_button = QPushButton("reset program", self)
+        self.reset_button.setGeometry(700, 500, 145, 45)
+        self.reset_button.clicked.connect(self.resetprogram)
+
+        #terminator
+        self.exit_button = QPushButton("Exit", self)
+        self.exit_button.setGeometry(850, 550, 145, 45)
+        self.exit_button.clicked.connect(self.exit_program)
+
+        # Create a checkbox
+        self.voicecheckbox = QCheckBox('professional talk', self)
+        self.voicecheckbox.stateChanged.connect(self.proftalk)
+        self.voicecheckbox.setGeometry(860, 600, 150, 50)
+
+        #terminator
+        self.Contrib = QPushButton("contributions", self)
+        self.Contrib.setGeometry(550, 550, 145, 45)
+        self.AItext=''
+        self.captured_image = None 
+        self.injury=None
+        self.lines = [] #a list with only all the displayed lines locations (x,y) 
+        self.line_lengths = []
+        self.a=-1
+        self.z=0
+
+        self.vid = cv.VideoCapture(0)
+        # 'http://NehaliPhone:nehalpass1@@esp32.local:81/stream')
+
+
+        #self.cap = cv.VideoCapture(0)
+        self._, self.frame = self.vid.read()
+        self.old_gray = cv.cvtColor(self.frame, cv.COLOR_BGR2GRAY)
+        self.square_size = 90
+        self.bottom_left_point = (30, 310)
+        self.lk_params = dict(winSize=(20, 20),maxLevel=4,criteria=(cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, 10, 0.01))
+        self.old_points = np.array([[]])
+        self.qr_detected= False
+        self.vidd=True
+        self.qrpos=" "
+        self.voicetone=False
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_video)
+        self.timer.start(1)
+        self.serial_thread = SerialThread('/dev/cu.usbserial-1410')
+        self.serial_thread.data_received.connect(self.handle_serial_data)
+        self.serial_worker = threading.Thread(target=self.serial_thread.start_serial)
+        self.serial_worker.start()
+        self.show()
+
+
+    def proftalk(self, state):
+        if state ==  Qt.Checked:
+            self.voicetone=True
+        else:
+            self.voicetone=False
+
+    def start_action(self):
+        self.start = True
+        self.a=0
+        self.z=0
+        self.qrpos=" "
+
+    def exit_program(self):
+        if self.serial_thread.running:
+            # Send a stop command to Arduino
+            self.serial_thread.arduino.write("exit".encode('utf-8'))
+            # Stop the serial thread
+            self.serial_thread.stop_serial()
+            # Wait for the serial thread to finish
+            self.serial_worker.join()
+        cv.destroyAllWindows()
+        self.timer.stop()  # Stop the timer
+        self.close()
+
+    def tryonelineaction(self):
+        self.tryline=True
+
+    def toggle_pause_resume(self):
+        self.paused = not self.paused
+        if self.paused==True:
+            self.pause_resume_button.setText("Resume")
+            self.serial_thread.arduino.write("\npause\n".encode('utf-8'))
+            print("py pause")
+            self.printing== False
+        else:
+            self.pause_resume_button.setText("Pause")
+            self.serial_thread.arduino.write("\nresume\n".encode('utf-8'))
+            print("py resume")
+            self.printing== True
+
+    def resetprogram(self):
+        self.z=0
+        self.a=-1
+        self.paused = False
+        self.threshvalue=0
+        self.captured_image=None
+        self.linesstep=20
+        self.qrpos=" "
+
+    def update_threshold(self):
+        self.threshvalue = self.threshscrollbar.value()
+        self.threshold_label.setText("threshold Value: " + str(self.threshvalue))
+
+    def update_linestep(self):
+        self.linesstep = self.scrollbar.value()
+        self.label.setText("line step Value: " + str(self.linesstep))
+
+    def capture_image(self):
+        ret, frame = self.vid.read()
+        if ret:
+            self.captured_image = frame.copy()  # Store the captured image
+
+    def capture_injury_image(self):
+        ret, frame = self.vid.read()
+        if ret:
+            self.injury = frame.copy()  # Store the captured injury image
+            save_path = 'imagess'
+            if not os.path.exists(save_path):
+                os.makedirs(save_path)
+            image_name = os.path.join(save_path, 'image_1.jpg')
+            cv.imwrite(image_name, self.injury)
+
+    def handle_serial_data(self, response):
+        self.serial_thread.arduino.write(f"{self.qrpos}".encode('utf-8'))
+        print(response)
+        if self.printing== True and self.qrpos=="stable":
+
+            if self.vidd==True:# when an image is uploaded the condtion starts
+
+                if self.tryline==True:#when user clicks the try 1 line button the trial print is started
+                    line_str = f"downtry,{self.line_lengths[6]},0,0,0"
+                    self.serial_thread.arduino.write(line_str.encode('utf-8'))
+                    self.tryline=False # resetting the try to False so that the random line is not printed again
+
+
+                #self.lines is a list that includes the pixel locations for all displayed lines , space between each line is known from linestep 
+                if self.z<len(self.lines): # when the line counter is less than the len of line list the condtion starts 
+
+                    #----------------------------------------CASE A------------------------------------------
+                    #while printing we have two direction , one is printing DOWN when line counter is even(every other line)
+                    #also this conditon is started when user clicks start button                           ------line1--------                   -----------line2---------------
+                    # lines list is consisted of smaller lists each reasmmbleing a line displayed [(x0,y0),(x1,y1),(x2,y2),(x3,y3),(x4,y4)],[(x0,y0),(x1,y1),(x2,y2),(x3,y3),(x4,y4)]
+                    #each of these smaller lists consits of tuples(x,y) reasmmbling all pixel locations or points on the line
+                    if self.a==0:
+                        if self.z%2==0:
+                            
+                            self.pointA = self.lines[self.z][-1] # pointA resambles the last point of lines[z] ( we need it to calculate dist to move either up or down to the next line )
+                            #                  we used [-1] as after moving down of  the line and to move to the next to we draw a hypotenuse from pointA-PointB 
+                            if self.z + 1 == len(self.lines): #when line counter z is almost running out of lines list meaning that there is no next line to move to so pointB=pointA
+                                self.pointB = self.lines[self.z][-1]
+
+                            elif self.z + 1 < len(self.lines):
+                                self.pointB = self.lines[self.z+1][-1] # pointB resambles the last point of lines[z+1] meaning the line we want to move to (next line)
+                            #         -----------------------------CASEA1------------------
+                            #inside the downward movement we have two possiblities whether we are moving towards a higher point (pointB)
+                            #so our  direction must consider moving towards that point without getting out of the shape range
+                            # movement will be 1. down of the line till pointA, 2. using Pythagorean theorem we will caculate the unknown up movement 
+                            #towards pointB 3. along with already known right dist (linestep)
+                            if self.pointB[1]<self.pointA[1]:
+                                if response=="donefinal" or self.start==True:
+                                    print("CaseA1")
+                                    line_str = f"down,{self.line_lengths[self.linestep*self.z]},0,0,0"
+                                    self.serial_thread.arduino.write(line_str.encode('utf-8'))
+                                    self.start=False
+                                elif response=="donedown":
+                                    distAB= math.sqrt(((self.pointA[0]-self.pointB[0])**2)+((self.pointA[1]-self.pointB[1])**2))
+                                    lenup=math.sqrt((distAB**2)-(self.linestep**2))
+                                    line_str = f"up,{lenup},0,0,0"
+                                    self.serial_thread.arduino.write(line_str.encode('utf-8'))
+                                elif response=="doneup":
+                                    line_str = f"rightfinal,{self.linestep},0,0,0"
+                                    self.serial_thread.arduino.write(line_str.encode('utf-8'))
+                                    self.z+=1 
+                                    print("end A1")
+                                    # after finshing one line movement and moved to next line start point we add +1 to line counter
+                            #         -----------------------------CASEA2------------------
+                            #  moving twoards a lower PointB
+                            ## movement will be 1. down of the line till pointA, 2. using Pythagorean theorem we will caculate the unknown down movement 
+                            #towards pointB 3. along with already known right dist (linestep)
+                            elif self.pointB[1]>self.pointA[1]:
+                                if response=="donefinal" or self.start==True:
+                                    print("CaseA2")
+                                    line_str = f"down,{self.line_lengths[self.linestep*self.z]},0,0,0"
+                                    self.serial_thread.arduino.write(line_str.encode('utf-8'))
+                                    self.start=False
+                                elif response=="donedown":
+                                    line_str = f"right1,{self.linestep},0,0,0"
+                                    self.serial_thread.arduino.write(line_str.encode('utf-8'))
+                                elif response=="doneright1":
+                                    distAB= math.sqrt(((self.pointA[0]-self.pointB[0])**2)+((self.pointA[1]-self.pointB[1])**2))
+                                    lendown=math.sqrt((distAB**2)-(self.linestep**2))
+                                    line_str = f"downfinal,{lendown},0,0,0"
+                                    self.serial_thread.arduino.write(line_str.encode('utf-8'))
+                                    self.z+=1
+                                    print("end A2 ")
+                            #this case is applied only when there is no next line 
+                            elif self.pointA[1]==self.pointB[1] and self.pointA[0]!=self.pointB[0]:
+                                if response=="donefinal" or self.start==True:
+                                    print("CaseA3")
+                                    line_str = f"down,{self.line_lengths[self.linestep*self.z]},0,0,0"
+                                    self.serial_thread.arduino.write(line_str.encode('utf-8'))
+                                    self.start=False
+                                elif response=="donedown":
+                                    line_str = f"rightfinal,{self.linestep},0,0,0"
+                                    self.z+=1
+                                    print("end A3")
+                            elif self.pointA[1]==self.pointB[1] and self.pointA[0]==self.pointB[0] and response=="donefinal":
+                                print("Case AF")
+                                line_str = f"downfinal,{self.line_lengths[self.linestep*self.z]},0,0,0"
+                                self.serial_thread.arduino.write(line_str.encode('utf-8'))
+                                self.z=0
+                                self.a=-1
+                                self.start=False
+                                # self.pointB=self.lines[-1][-1]
+                                print("end AF")
+                            
+                        ##----------------------------------------CASE B------------------------------------------
+                        #same cases applies to this condtion but with upward motion applied when z is odd num(every other line)
+                        elif self.z%2==1:
+                            if self.z<len(self.lines):
+                                self.pointA = self.lines[self.z][0]
+                                if self.z + 1 == len(self.lines):
+                                    self.pointB = self.lines[self.z][0]
+                                elif self.z + 1 < len(self.lines):
+                                    self.pointB = self.lines[self.z+1][0]
+                                #         -----------------------------CASEB1------------------
+                                if self.pointB[1]<self.pointA[1]:
+                                    if response=="donefinal":
+                                        print("CaseB1")
+                                        line_str = f"up,{self.line_lengths[self.linestep*self.z]},0,0,0"
+                                        self.serial_thread.arduino.write(line_str.encode('utf-8'))
+                                    elif response=="doneup":
+                                        line_str = f"right,{self.linestep},0,0,0"
+                                        self.serial_thread.arduino.write(line_str.encode('utf-8'))
+                                    elif response=="doneright":
+                                        distAB= math.sqrt(((self.pointA[0]-self.pointB[0])**2)+((self.pointA[1]-self.pointB[1])**2))
+                                        lenup=math.sqrt((distAB**2)-(self.linestep**2))
+                                        line_str = f"upfinal,{lenup},0,0,0"
+                                        self.serial_thread.arduino.write(line_str.encode('utf-8'))
+                                        self.z+=1
+                                        print("end B1")
+                                #         -----------------------------CASEB2------------------
+                                elif self.pointB[1]>self.pointA[1]:
+                                    if response=="donefinal":
+                                        print("Case B2")
+                                        line_str = f"up,{self.line_lengths[self.linestep*self.z]},0,0,0"
+                                        self.serial_thread.arduino.write(line_str.encode('utf-8'))
+                                    elif response=="doneup":
+                                        distAB= math.sqrt(((self.pointA[0]-self.pointB[0])**2)+((self.pointA[1]-self.pointB[1])**2))
+                                        lendown=math.sqrt((distAB**2)-(self.linestep**2))
+                                        line_str = f"down,{lendown},0,0,0"
+                                        self.serial_thread.arduino.write(line_str.encode('utf-8'))
+                                        
+                                    elif response=="donedown":
+                                        line_str = f"rightfinal,{self.linestep},0,0,0"
+                                        self.serial_thread.arduino.write(line_str.encode('utf-8'))
+                                        self.z+=1
+                                        print("end B2")
+                                elif self.pointA[1]==self.pointB[1]and self.pointA[0]!=self.pointB[0]:
+                                    print("Case B3")
+                                    if response=="donefinal" :
+                                        line_str = f"up,{self.line_lengths[self.linestep*self.z]},0,0,0"
+                                        self.serial_thread.arduino.write(line_str.encode('utf-8'))
+                                    elif response=="doneup":
+                                        line_str = f"rightfinal,{self.linestep},0,0,0"
+                                        self.z+=1
+                                        print("end B3")
+                                elif self.pointA[1]==self.pointB[1] and self.pointA[0]==self.pointB[0] and response=="donefinal":
+                                    print("Case BF")
+                                    line_str = f"upfinal,{self.line_lengths[self.linestep*self.z]},0,0,0" 
+                                    self.serial_thread.arduino.write(line_str.encode('utf-8'))
+                                    self.z=0
+                                    self.a=-1
+                                    self.start=False
+                                    self.pointB=self.lines[-1][-1]
+                                    print("end BF")
+
+    def update_video(self):
+        _, image1 = self.vid.read()
+        if image1 is None:
+            return
+        
+        if self.captured_image is not None:
+            image2 = cv.resize(self.captured_image, (image1.shape[1], image1.shape[0]))
+
+        else:
+            image2 = np.zeros_like(image1)  # Display a black image if no captured image
+
+        # if self.injury is not None:
+        #     injury_image = cv.resize(self.injury, (image1.shape[1], image1.shape[0]))
+
+        # else:
+        #     injury_image = np.zeros_like(image1)  # Display a black image if no injury capture
+        qr=image1.copy()
+        self.qrpos,frame=self.qr_track(qr)
+        # print(self.qrpos)
+        self.serial_thread.arduino.write(f"{self.qrpos}".encode('utf-8'))
+        result = self.find_contours(image1, image2)
+        img = result.copy()
+        result_gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+        self.lines = [] #a list with only all the displayed lines locations (x,y) 
+        self.line_lengths = [] # a list with all the lines lenghts in the white region including those dispalyed or not
+        line_coordinates = [] # a list with all the lines locations (x,y) in the white region including those dispalyed or not
+
+        if self.a==0:
+            for x in range(result_gray.shape[1]):
+                col_pixels = result_gray[:, x]
+                line_length = cv.countNonZero(col_pixels) # couting the length of each line in white region(nonzero region)
+                if line_length != 0: 
+                    self.line_lengths.append(line_length)
+                    y_coordinates = np.where(col_pixels > 0)[0] # adding the  vertical lines
+                    line_coordinates.append([(x, y) for y in y_coordinates])
+
+            line_coordinates_np = [np.array(line, dtype=np.int32) for line in line_coordinates]
+
+            for i in range(0, len(line_coordinates_np), self.linesstep):
+                if i < len(line_coordinates_np):
+                    self.lines.append(line_coordinates_np[i])
+                # drawing lines to observe the movement of the printer
+                        
+                for i in range(self.z):
+                    if i%2==0:
+                        if i+1<len(self.lines):
+                            cv.line(result, self.lines[i][-1],self.lines[i+1][-1], (0,0,255), 2)
+                    if i%2==1:
+                        if i+1<len(self.lines):
+                            cv.line(result, self.lines[i][0],self.lines[i+1][0], (0,0,255), 2)
+                        
+                cv.polylines(result, self.lines, isClosed=True, color=(255,0,0), thickness=4)
+                cv.polylines(result, self.lines[:self.z+1], isClosed=True, color=(0, 255, 0), thickness=4)
+
+        if os.path.exists('imagess/image_1.jpg'):
+            # self.AItext = self.AImodel_prediction()
+            # self.update_ai_label()
+            s=0
+        img= cv.cvtColor(frame, cv.COLOR_BGR2RGB)
+        
+        # img= cv.cvtColor(result, cv.COLOR_BGR2RGB)
+        image = QImage(img.data, img.shape[1], img.shape[0], img.strides[0], QImage.Format_RGB888)
+        pixmap = QPixmap.fromImage(image)
+        # Resize the image to fit the QLabel
+        self.image_label.setPixmap(pixmap.scaled(self.image_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+
+    # def update_ai_label(self):
+    #     self.text.setText(self.AItext)
+
+    # def AImodel_prediction(self):
+    #     np.set_printoptions(suppress=True)
+    #     image = cv.imread('imagess/image_1.jpg')
+    #     image = cv.resize(image, (224, 224), interpolation=cv.INTER_AREA)
+    #     image = np.asarray(image, dtype=np.float32).reshape(1, 224, 224, 3)
+    #     image = (image / 127.5) - 1
+    #     prediction = self.model.predict(image)
+    #     index = np.argmax(prediction)
+    #     class_name = self.class_names[index]
+    #     confidence_score = prediction[0][index]
+    #     os.remove('imagess/image_1.jpg')
+    #     self.AItext= f"your  injury is {str(np.round(confidence_score * 100))[:-2]}% {class_name[2:]}"
+    #     return self.AItext
+        
+
+
+    def qr_track(self,vid):
+        frame = vid.copy()
+        frame= self.draw_square(frame,self.bottom_left_point,self.square_size)
+        gray_frame = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+        # display the image and wait for a keypress
+        hull_points = self.detectQRcode(frame)
+        inclinedu=" "
+        inclinelr=" "
+        move=" "
+        qr_position=" "
+        speedqr="low"
+        serialdata="none"
+        speed=0
+        stop_code=False
+        if hull_points:
+            pt1, pt2, pt3, pt4 = hull_points
+            self.qr_detected= True
+            stop_code=True
+            self.old_points = np.array([pt1, pt2, pt3, pt4], dtype=np.float32)
+            frame = self.fillPolyTrans(frame, hull_points, (255,0,255), 0.4)
+            cv.circle(frame, pt1, 3, (0,255,0), 3)
+            cv.circle(frame, pt2, 3, (255, 0, 0), 3)
+            cv.circle(frame, pt3, 3,(0,255,255), 3)
+            cv.circle(frame, pt4, 3, (0, 0, 255), 3)
+            # Calculate lengths of sides
+            left = np.linalg.norm(np.array(pt1) - np.array(pt2))  
+            down = np.linalg.norm(np.array(pt2) - np.array(pt3))  
+            right = np.linalg.norm(np.array(pt3) - np.array(pt4))  
+            up = np.linalg.norm(np.array(pt4) - np.array(pt1))  
+            # print("left:",left,'\n',"right:",right,'\n',"down:",down,'\n',"up:",up)
+            if left-right>=2:
+                inclinelr="rightincline"
+            elif right-left>=2:
+                inclinelr="leftincline"
+            else:
+                inclinelr= "stable"
+            if up-down>=2:
+                inclinedu= "downincline"
+            elif down-up>=2:
+                inclinedu= "upincline"
+            else:
+                inclinedu= "stable"
+
+            cv.putText(frame, f"incline: {inclinelr,inclinedu}", (10, 150), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 0,255), 2, cv.LINE_AA)
+            # Calculate QR diameter and center
+            qr_diameter = max(np.linalg.norm(np.array(hull_points[0]) - np.array(hull_points[2])),np.linalg.norm(np.array(hull_points[1]) - np.array(hull_points[3])))
+            qr_center_x = sum(point[0] for point in hull_points) // len(hull_points)
+            qr_center_y = sum(point[1] for point in hull_points) // len(hull_points)
+
+            # Display QR Diameter
+            # cv.putText(frame, f"Diameter: {qr_diameter}", (10, 90), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv.LINE_AA)
+
+            # Middle coordinates of the frame
+            middle_x, middle_y = 75, 355
+
+            # Draw arrow from QR center to the middle of the grid
+            cv.arrowedLine(frame, (qr_center_x, qr_center_y), (75, 355), (0, 255, 255), 2)
+
+            # Calculate the position of the QR code within the grid
+            qr_position = " "
+            move=" "
+            if qr_center_x==middle_x and qr_center_y< middle_y:
+                qr_position = "uppos"
+            elif qr_center_x>middle_x and qr_center_y== middle_y:
+                qr_position = "rightpos"
+            elif qr_center_x>middle_x and qr_center_y<middle_y:
+                qr_position = "uprightpos"
+            else:
+                qr_position="stable"
+            if qr_diameter>110:
+                move='back'
+            elif qr_diameter<90:
+                move='forward'
+            else:
+                move="stable"
+            
+            qr_distance_from_optimum = np.sqrt((qr_center_x - middle_x) ** 2 + (qr_center_y - middle_y) ** 2)
+
+            if qr_distance_from_optimum > 50:  # Adjust this threshold as needed
+                # Implement speed calculation similar to the optical flow block
+                speed, current_points = self.track_speed(self.old_gray, gray_frame, np.array([pt1, pt2, pt3, pt4], dtype=np.float32))
+                if len(current_points) > 0:
+                    x, y, w, h = cv.boundingRect(current_points.astype(np.int32))
+                    # cv.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                    # cv.putText(frame, f'Speed: {speed:.2f} pixels/frame', (300, 300), cv.FONT_HERSHEY_SIMPLEX, 1,(0, 255, 0), 2, cv.LINE_AA)
+                    cv.putText(frame, f"{qr_position} & {move},Diameter: {round(qr_diameter, 2)}, Speed: {speed:.2f} pixels/frame", (10, 120), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv.LINE_AA)
+            
+            if speed>=0 and speed <=2:
+                speedqr="low"
+            elif speed>=2.1 and speed <=10:
+                speedqr="medium"
+            elif speed>10:
+                speedqr="high"
+
+        if self.qr_detected and stop_code == False:
+            new_points, status, error = cv.calcOpticalFlowPyrLK(self.old_gray, gray_frame, self.old_points, None, **self.lk_params)
+            self.old_points = new_points
+            new_points = new_points.astype(int)
+            n = len(new_points)
+            frame = self.fillPolyTrans(frame, new_points, (0, 255, 0), 0.4)
+            pt1, pt2, pt3, pt4 = new_points
+            cv.circle(frame, pt1, 3, (0,255,0), 3)
+            cv.circle(frame, pt2, 3, (255, 0, 0), 3)
+            cv.circle(frame, pt3, 3,(0,255,255), 3)
+            cv.circle(frame, pt4, 3, (0, 0, 255), 3)
+            # Calculate lengths of sides
+            left = np.linalg.norm(np.array(pt1) - np.array(pt2))  # side1_length
+            down = np.linalg.norm(np.array(pt2) - np.array(pt3))  # side2_length
+            right = np.linalg.norm(np.array(pt3) - np.array(pt4))  # side3_length
+            up = np.linalg.norm(np.array(pt4) - np.array(pt1))  # side4_length
+            # print("left:",left,'\n',"right:",right,'\n',"down:",down,'\n',"up:",up)
+            inclinelr=' '
+            inclinedu=' '
+            if left-right>=2:
+                inclinelr="rightincline"
+            elif right-left>=2:
+                inclinelr="leftincline"
+            else:
+                inclinelr= "stable"
+            if up-down>=2:
+                inclinedu= "downincline"
+            elif down-up>=2:
+                inclinedu= "upincline"
+            else:
+                inclinedu= "stable"
+
+            cv.putText(frame, f"incline: {inclinelr,inclinedu}", (10, 150), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 0,255), 2, cv.LINE_AA)
+
+            qr_diameter = max(np.linalg.norm(np.array(new_points[0]) - np.array(new_points[-1])),np.linalg.norm(np.array(new_points[n // 2]) - np.array(new_points[n // 2 - 1])))
+            qr_center_x = sum(point[0] for point in new_points) // len(new_points)
+            qr_center_y = sum(point[1] for point in new_points) // len(new_points)
+
+            # cv.putText(frame, f"Diameter (Optical Flow): {qr_diameter}", (10, 150), cv.FONT_HERSHEY_SIMPLEX, 1,(0, 255, 0), 2, cv.LINE_AA)
+
+            middle_x, middle_y = 75, 355
+            cv.arrowedLine(frame, (qr_center_x, qr_center_y), (75, 355), (0, 255, 255), 2)
+
+            qr_position = " "
+            move=" "
+            if qr_center_x==middle_x and qr_center_y< middle_y:
+                qr_position = "uppos"
+            elif qr_center_x>middle_x and qr_center_y== middle_y:
+                qr_position = "rightpos"
+            elif qr_center_x>middle_x and qr_center_y<middle_y:
+                qr_position = "uprightpos"
+            else:
+                qr_position="stable"
+            if qr_diameter>80:
+                move='back'
+            elif qr_diameter<60:
+                move='forward'
+            else:
+                move="stable"
+            # cv.putText(frame, f"{qr_position} & move {move}", (10, 180), cv.FONT_HERSHEY_SIMPLEX, 1,(255, 255, 0), 2, cv.LINE_AA)
+            qr_distance_from_optimum= np.sqrt((qr_center_x - middle_x) ** 2 + (qr_center_y - middle_y) ** 2)
+            if speed>=0 and speed <=2:
+                speedqr="low"
+            elif speed>=2.1 and speed <=10:
+                speedqr="medium"
+            elif speed>10:
+                speedqr="high"
+
+            if qr_distance_from_optimum > 50:  # Adjust this threshold as needed
+                speed, current_points = self.track_speed(self.old_gray, gray_frame, self.old_points)
+                if len(current_points) > 0:
+                    x, y, w, h = cv.boundingRect(current_points.astype(np.int32))
+                    # cv.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                    # cv.putText(frame, f'Speed: {speed:.2f} pixels/frame', (300, 300), cv.FONT_HERSHEY_SIMPLEX, 1,(0, 255, 0), 2, cv.LINE_AA)
+                    cv.putText(frame, f"{qr_position} & {move},Diameter: {round(qr_diameter, 2)}, Speed: {speed:.2f} pixels/frame", (10, 120), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv.LINE_AA)
+            
+            # data_with_newline = qr_position + '\n'
+            # arduino.write(data_with_newline.encode('utf-8'))
+            # time.sleep(0.1)
+        serialdata=f"{speedqr},{inclinelr},{inclinedu},{move},{qr_position}"+'\n'
+        if inclinedu and inclinelr and move and qr_position =="stable":
+            serialdata="stable"+"\n"
+        self.old_gray = gray_frame.copy()
+        # self.serial_thread.arduino.write(f"{serialdata}".encode('utf-8'))
+        return serialdata,frame
+
+    def draw_square(self,frame, bottom_left_point, square_size):
+        top_right_point = (bottom_left_point[0] + square_size, bottom_left_point[1] + square_size)
+        square_color = (0, 255, 0)  # Green color
+        thickness = 2
+        center_x = (bottom_left_point[0] + top_right_point[0]) // 2
+        center_y = (bottom_left_point[1] + top_right_point[1]) // 2
+        diameter=max(top_right_point[0] - bottom_left_point[0], top_right_point[1] - bottom_left_point[1])
+        # Draw the square on the frame
+        cv.putText(frame, f"Center: ({center_x}, {center_y})", (10, frame.shape[0] - 30), cv.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv.LINE_AA)
+        cv.putText(frame, f"Diameter: {diameter}", (10, frame.shape[0] - 10), cv.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv.LINE_AA)
+        cv.rectangle(frame, bottom_left_point, top_right_point, square_color, thickness)
+        return frame
+
+    def track_speed(self,prev_frame, current_frame, prev_points):
+        # Parameters for Lucas-Kanade optical flow
+        lk_params = dict(winSize=(20, 20),maxLevel=4,criteria=(cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, 10, 0.01))
+
+        current_points, status, _ = cv.calcOpticalFlowPyrLK(prev_frame, current_frame, prev_points, None, **lk_params)
+
+        valid_current_points = current_points[status.flatten() == 1]
+        valid_prev_points = prev_points[status.flatten() == 1]
+
+        displacement = np.sqrt(np.sum(np.square(valid_current_points - valid_prev_points), axis=1))
+        speed = np.mean(displacement)
+
+        return speed, valid_current_points
+
+    def fillPolyTrans(self,img, points, color, opacity, line_thickness=2):
+        list_to_np_array = np.array(points, dtype=np.int32)
+        overlay = img.copy()  # coping the image
+        cv.fillPoly(overlay,[list_to_np_array], color )
+        new_img = cv.addWeighted(overlay, opacity, img, 1 - opacity, 0)
+        # print(points_list)
+        img = new_img
+        cv.polylines(img, [list_to_np_array], True, color,line_thickness, cv.LINE_AA)
+        return img
+
+    def detectQRcode(self,image):
+        # convert the color image to gray scale image
+        Gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
+        # create QR code object
+        objectQRcode = pyzbar.pyzbar.decode(Gray)
+        for obDecoded in objectQRcode: 
+            x, y, w, h =obDecoded.rect
+            # cv.rectangle(image, (x,y), (x+w, y+h), ORANGE, 4)
+            points = obDecoded.polygon
+            if len(points) > 4:
+                hull = cv.convexHull(
+                    np.array([points for point in points], dtype=np.float32))
+                hull = list(map(tuple, np.squeeze(hull)))
+            else:
+                hull = points
+            return hull
+
+    def find_contours(self, image1, image2):
+        gray_image1 = cv.cvtColor(image1, cv.COLOR_BGR2GRAY)
+        gray_image2 = cv.cvtColor(image2, cv.COLOR_BGR2GRAY)
+        difference = cv.absdiff(gray_image2, gray_image1)
+        blur = cv.GaussianBlur(difference, (19, 19), cv.BORDER_DEFAULT)
+        _, thresh = cv.threshold(blur, self.threshvalue, 255, cv.THRESH_BINARY)
+        contours, _ = cv.findContours(thresh, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_NONE)
+        cv.drawContours(image1, contours, -1, (0, 0, 0), 5)
+        mask = np.zeros_like(image1)
+        cv.drawContours(mask, contours, -1, (255, 255, 255), thickness=cv.FILLED)
+        result = cv.bitwise_and(image1, mask)
+        return result
+
+App = QApplication(sys.argv)
+window = Window()
+sys.exit(App.exec_())
