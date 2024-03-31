@@ -1,0 +1,94 @@
+import cv2
+import numpy as np
+from PyQt5.QtWidgets import QApplication, QMainWindow, QScrollBar, QLabel
+from PyQt5.QtCore import Qt, QTimer
+import sys
+
+class Window(QMainWindow):
+    def __init__(self):
+        super().__init__()
+
+        self.setWindowTitle("Threshold Scrollbar")
+        self.setGeometry(100, 100, 600, 400)
+
+        self.scrollbar = QScrollBar(self)
+        self.scrollbar.setGeometry(100, 50, 30, 200)
+        self.scrollbar.setRange(3, 190)
+        self.scrollbar.setStyleSheet("background : lightblue;")
+        self.scrollbar.valueChanged.connect(self.update_threshold)
+
+        self.label = QLabel("Threshold Value: 0", self)
+        self.label.setGeometry(200, 100, 300, 80)
+        self.label.setWordWrap(True)
+
+        self.vid = cv2.VideoCapture(0)  # Update with your injury video path or use live vid
+        self.vid2 = cv2.VideoCapture('/Users/nihal/Library/Containers/ru.keepcoder.Telegram/Data/tmp/FILE 2024-03-31 13:07:34.mp4')  # Update with your control skin
+        self.threshvalue = 0
+
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_video)
+        self.timer.start(300)  # Change this value to adjust frame rate
+
+        self.show()
+
+    def update_threshold(self):
+        self.threshvalue = self.scrollbar.value()
+        self.label.setText("Current Value: " + str(self.threshvalue))
+
+    def update_video(self):
+        isTrue, image1 = self.vid.read()
+        isTrue, image2 = self.vid2.read()
+
+        if not isTrue:
+            return
+
+        image2 = cv2.resize(image2, (image1.shape[1], image1.shape[0]))
+        result = self.findcontours(image1, image2)
+        cv2.namedWindow('results', cv2.WINDOW_NORMAL)
+        cv2.imshow('results', np.hstack((result, image1)))
+        # cv2.imshow('vid masked', result)
+        # cv2.imshow('vid contours',image1)
+
+        self.detect_and_print_coordinates(result)
+
+    def findcontours(self, image1, image2):
+        gray_image1 = cv2.cvtColor(image1, cv2.COLOR_BGR2GRAY)
+        gray_image2 = cv2.cvtColor(image2, cv2.COLOR_BGR2GRAY)
+
+        difference = cv2.absdiff(gray_image2, gray_image1)
+        blur = cv2.GaussianBlur(difference, (19, 19), cv2.BORDER_DEFAULT)
+        ret, thresh = cv2.threshold(blur, self.threshvalue, 255, cv2.THRESH_BINARY)
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+
+        cv2.drawContours(image1, contours, -1, (0, 0, 0), 5)
+        mask = np.zeros_like(image1)
+        cv2.drawContours(mask, contours, -1, (255, 255, 255), thickness=cv2.FILLED)
+
+        result = cv2.bitwise_and(image1, mask)
+        return result
+
+    def detect_and_print_coordinates(self, result):
+    
+        result_gray = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
+
+        line_lengths = []
+        line_coordinates = []
+
+        for x in range(result_gray.shape[1]):
+            col_pixels = result_gray[:, x]
+            line_length = cv2.countNonZero(col_pixels)
+            if line_length != 0:
+                line_lengths.append(line_length)
+                y_coordinates = np.where(col_pixels > 0)[0]
+                line_coordinates.append([(x, y) for y in y_coordinates])
+
+        for i, length in enumerate(line_lengths):
+            coordinates = line_coordinates[i]
+            first_coord = coordinates[0]
+            last_coord = coordinates[-1]
+            print(f"Line {i + 1}: Length - {length}, First Coord - {first_coord}, Last Coord - {last_coord}")
+        # cv2.polylines(image1,line_coordinates,True,(0,255,0),2)
+
+App = QApplication(sys.argv)
+window = Window()
+sys.exit(App.exec_())

@@ -1,0 +1,150 @@
+import cv2 as cv
+import numpy as np
+from PyQt5.QtWidgets import QApplication, QMainWindow, QScrollBar, QLabel, QPushButton
+from PyQt5.QtCore import Qt, QTimer
+import sys
+import os
+class Window(QMainWindow):
+    def __init__(self):
+        super().__init__()
+
+        self.setWindowTitle("Threshold Scrollbar")
+        self.setGeometry(100, 100, 800, 600)
+
+        self.scrollbar = QScrollBar(self)
+        self.scrollbar.setGeometry(100, 50, 30, 200)
+        self.scrollbar.setRange(3, 190)
+        self.scrollbar.setStyleSheet("background : lightblue;")
+        self.scrollbar.valueChanged.connect(self.update_threshold)
+
+        self.label = QLabel("Value: 0", self)
+        self.label.setGeometry(200, 100, 300, 80)
+        self.label.setWordWrap(True)
+
+        self.scrollbar_label = QLabel("adjust injury location", self)
+        self.scrollbar_label.setGeometry(100, 20, 150, 20)
+
+        self.line_scrollbar = QScrollBar(self)
+        self.line_scrollbar.setGeometry(400, 50, 30, 200)
+        self.line_scrollbar.setRange(1, 50)  # Range for linesstep
+        self.line_scrollbar.setStyleSheet("background : lightgreen;")
+        self.line_scrollbar.valueChanged.connect(self.update_lines_step)
+
+        self.line_label = QLabel(" Value: 20", self)
+        self.line_label.setGeometry(500, 100, 300, 80)
+        self.line_label.setWordWrap(True)
+
+        self.line_scrollbar_label = QLabel("adjust spary tightness", self)
+        self.line_scrollbar_label.setGeometry(400, 20, 150, 20)
+
+        self.capture_button = QPushButton("Capture healthy skin", self)
+        self.capture_button.setGeometry(600, 300, 150, 50)
+        self.capture_button.clicked.connect(self.capture_image)
+
+        self.capture_injury_button = QPushButton("Capture injury", self)
+        self.capture_injury_button.setGeometry(600, 400, 150, 50)
+        self.capture_injury_button.clicked.connect(self.capture_injury_image)
+
+        self.vid = cv.VideoCapture(0)
+        self.captured_image = None  # Store the captured image
+        self.injury = None  # Store the captured injury image for AI lib
+        self.threshvalue = 0
+        self.linesstep = 20  # Default value for linesstep
+
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_video)
+        self.timer.start(1)  # Change this value to adjust frame rate
+
+        self.show()
+
+    def update_threshold(self):
+        self.threshvalue = self.scrollbar.value()
+        self.label.setText("Value: " + str(self.threshvalue))
+
+    def update_lines_step(self):
+        self.linesstep = self.line_scrollbar.value()
+        self.line_label.setText("Value: " + str(self.linesstep))
+
+    def capture_image(self):
+        ret, frame = self.vid.read()
+        if ret:
+            self.captured_image = frame.copy()  # Store the captured image
+
+    def capture_injury_image(self):
+        ret, frame = self.vid.read()
+        if ret:
+            self.injury = frame.copy()  # Store the captured injury image
+            save_path = 'imagess'
+            if not os.path.exists(save_path):
+                os.makedirs(save_path)
+            image_name = os.path.join(save_path, 'image_1.jpg')
+            cv.imwrite(image_name, self.injury)
+            with open("/Users/nihal/Desktop/UPDATED Teachable Model/tfmodelnew.py", "r") as file:
+                code = file.read()
+                exec(code)
+    def update_video(self):
+        _, image1 = self.vid.read()
+
+        if image1 is None:
+            return
+
+        if self.captured_image is not None:
+            image2 = cv.resize(self.captured_image, (image1.shape[1], image1.shape[0]))
+        else:
+            image2 = np.zeros_like(image1)  # Display a black image if no captured image
+
+        if self.injury is not None:
+            injury_image = cv.resize(self.injury, (image1.shape[1], image1.shape[0]))
+        else:
+            injury_image = np.zeros_like(image1)  # Display a black image if no injury captured
+
+        result = self.find_contours(image1, image2)
+        img = result.copy()
+        result_gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+
+        line_lengths = []
+        line_coordinates = []
+
+        for x in range(result_gray.shape[1]):
+            col_pixels = result_gray[:, x]
+            line_length = cv.countNonZero(col_pixels)
+            if line_length != 0:
+                line_lengths.append(line_length)
+                y_coordinates = np.where(col_pixels > 0)[0]
+                line_coordinates.append([(x, y) for y in y_coordinates])
+
+        line_coordinates_np = [np.array(line, dtype=np.int32) for line in line_coordinates]
+        lines = []
+        z = 0
+        # print('----current frame line lengths and locations-----')
+        for i in range(0, len(line_coordinates_np), self.linesstep):
+            if i < len(line_coordinates_np):
+                lines.append(line_coordinates_np[i])
+                length = int(line_coordinates_np[i][-1][1]) - int(line_coordinates_np[i][0][1])
+                z += 1
+                # print(f"Line {z}: Length - {length}, First Coord - {line_coordinates_np[i][0]}, Last Coord - {line_coordinates_np[i][-1]}")
+
+       
+        cv.polylines(img, lines, isClosed=True, color=(255, 255, 255), thickness=2)
+        cv.namedWindow('results', cv.WINDOW_NORMAL)
+        cv.imshow('results', np.hstack((image1, img, image2, injury_image)))
+
+    def find_contours(self, image1, image2):
+        gray_image1 = cv.cvtColor(image1, cv.COLOR_BGR2GRAY)
+        gray_image2 = cv.cvtColor(image2, cv.COLOR_BGR2GRAY)
+
+        difference = cv.absdiff(gray_image2, gray_image1)
+        blur = cv.GaussianBlur(difference, (19, 19), cv.BORDER_DEFAULT)
+        _, thresh = cv.threshold(blur, self.threshvalue, 255, cv.THRESH_BINARY)
+        contours, _ = cv.findContours(thresh, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_NONE)
+
+        cv.drawContours(image1, contours, -1, (0, 0, 0), 5)
+        mask = np.zeros_like(image1)
+        cv.drawContours(mask, contours, -1, (255, 255, 255), thickness=cv.FILLED)
+
+        result = cv.bitwise_and(image1, mask)
+        return result
+
+App = QApplication(sys.argv)
+window = Window()
+sys.exit(App.exec_())
