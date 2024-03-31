@@ -1,0 +1,353 @@
+import cv2 as cv
+import numpy as np
+from PyQt5.QtWidgets import QApplication, QMainWindow, QScrollBar, QLabel, QPushButton
+from PyQt5.QtCore import Qt, QTimer
+import sys
+# from keras.models import load_model
+import os
+import serial
+import json
+from pyzbar.pyzbar import decode
+import pyzbar
+import time
+
+class Window(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.lk_params = dict(winSize=(20, 20),
+                        maxLevel=4,
+                        criteria=(cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, 10, 0.01))
+        self.points = [()]
+        self.old_points = np.array([[]])
+        self.qr_detected= False
+        self.z = 0
+        # self.model = load_model("keras_Model.h5", compile=False)
+        # self.class_names = open("labels.txt", "r").readlines()
+        # self.arduino = serial.Serial('/dev/cu.usbserial-1420', 115200, timeout=1)
+        self.setWindowTitle("Threshold Scrollbar")
+        self.setGeometry(100, 100, 800, 600)
+        self.scrollbar = QScrollBar(self)
+        self.scrollbar.setGeometry(100, 50, 30, 200)
+        self.scrollbar.setRange(3, 190)
+        self.scrollbar.setStyleSheet("background : lightblue;")
+        self.scrollbar.valueChanged.connect(self.update_threshold)
+        self.label = QLabel("Value: 0", self)
+        self.label.setGeometry(200, 100, 300, 80)
+        self.label.setWordWrap(True)
+        self.scrollbar_label = QLabel("adjust injury location", self)
+        self.scrollbar_label.setGeometry(100, 20, 150, 20)
+        self.line_scrollbar = QScrollBar(self)
+        self.line_scrollbar.setGeometry(400, 50, 30, 200)
+        self.line_scrollbar.setRange(1, 50)  # Range for linesstep
+        self.line_scrollbar.setStyleSheet("background : lightgreen;")
+        self.line_scrollbar.valueChanged.connect(self.update_lines_step)
+        self.line_label = QLabel(" Value: 20", self)
+        self.line_label.setGeometry(500, 100, 300, 80)
+        self.line_label.setWordWrap(True)
+        self.line_scrollbar_label = QLabel("adjust spary tightness", self)
+        self.line_scrollbar_label.setGeometry(400, 20, 150, 20)
+        self.capture_button = QPushButton("Capture healthy skin", self)
+        self.capture_button.setGeometry(600, 300, 150, 50)
+        self.capture_button.clicked.connect(self.capture_image)
+        self.capture_injury_button = QPushButton("Capture injury", self)
+        self.capture_injury_button.setGeometry(600, 400, 150, 50)
+        self.capture_injury_button.clicked.connect(self.capture_injury_image)
+        self.vid = cv.VideoCapture(0)
+        # 'http://NehaliPhone:nehalpass1@@esp32.local:81/stream')
+        self.captured_image = None  # Store the captured image
+        self.injury = None  # Store the captured injury image for AI lib
+        self.threshvalue = 0
+        self.linesstep = 20  # Default value for linesstep
+        self.start = False  # Initialize start condition to False
+        # Create a 'Start' button
+        self.start_button = QPushButton("Start", self)
+        self.start_button.setGeometry(600, 200, 150, 50)
+        self.start_button.clicked.connect(self.start_action)
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_video)
+        self.timer.start(1)  # Change this value to adjust frame rate
+        self.show()
+
+    def start_action(self):
+        self.start = True
+
+    def update_threshold(self):
+        self.threshvalue = self.scrollbar.value()
+        self.label.setText("Value: " + str(self.threshvalue))
+
+    def update_lines_step(self):
+        self.linesstep = self.line_scrollbar.value()
+        self.line_label.setText("Value: " + str(self.linesstep))
+
+    def capture_image(self):
+        ret, frame = self.vid.read()
+        if ret:
+            self.captured_image = frame.copy()  
+            # Store the captured image
+
+    def capture_injury_image(self):
+        ret, frame = self.vid.read()
+        if ret:
+            self.injury = frame.copy()  # Store the captured injury image
+            save_path = 'imagess'
+            if not os.path.exists(save_path):
+                os.makedirs(save_path)
+            image_name = os.path.join(save_path, 'image_1.jpg')
+            cv.imwrite(image_name, self.injury)
+
+    def update_video(self):
+        _, image1 = self.vid.read()
+        QR=image1.copy()
+        self.spray=False
+        textonimg='not stable'
+        colour=(255,0,0)
+        self.old_gray = cv.cvtColor(QR, cv.COLOR_BGR2GRAY)
+        qr_image, qr_position = self.QRtrack(QR)
+        if qr_position=='Center':
+            textonimg='stable'
+            colour=(0,255,0)
+            self.spray=True
+
+        if image1 is None:
+            return
+        if self.captured_image is not None:
+            image2 = cv.resize(self.captured_image, (image1.shape[1], image1.shape[0]))
+        else:
+            image2 = np.zeros_like(image1)  # Display a black image if no captured image
+        if self.injury is not None:
+            injury_image = cv.resize(self.injury, (image1.shape[1], image1.shape[0]))
+        else:
+            injury_image = np.zeros_like(image1)  # Display a black image if no injury captured
+        result,image1 = self.find_contours(image1, image2)
+        img = result.copy()
+        img=self.spraying(img,image1)
+        # if os.path.exists('imagess/image_1.jpg'):
+        #     self.AImodel_prediction()
+        cv.namedWindow('results', cv.WINDOW_NORMAL)
+        cv.putText(img,textonimg, (10, 90), cv.FONT_HERSHEY_SIMPLEX, 1, colour, 2, cv.LINE_AA)
+        cv.imshow('results', np.hstack((img,qr_image, image2, injury_image)))
+
+    def spraying(self,img,image1):
+        result_gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+        line_lengths = []
+        line_coordinates = []
+        for x in range(result_gray.shape[1]):
+            col_pixels = result_gray[:, x]
+            line_length = cv.countNonZero(col_pixels)
+            if line_length != 0:
+                line_lengths.append(line_length)
+                y_coordinates = np.where(col_pixels > 0)[0]
+                line_coordinates.append([(x, y) for y in y_coordinates])
+        line_coordinates_np = [np.array(line, dtype=np.int32) for line in line_coordinates]
+        lines = []
+        for i in range(0, len(line_coordinates_np), self.linesstep):
+            if i < len(line_coordinates_np):
+                lines.append(line_coordinates_np[i])
+        # print('----current frame line lengths and locations-----')
+        #print(line_coordinates_np)
+        # response = self.arduino.readline().rstrip(b'\r\n').decode('utf-8')
+        # print(response)
+        response=""
+        if self.start or response == 'done':
+            if self.spray==True:
+                if self.z < len(lines):
+                    line_list = lines[self.z].tolist()  # Convert NumPy array to list
+                    line_str = json.dumps(line_list)  # Convert the list to JSON
+                    # line_str = ' '.join(str(point) for point in lines[z].flatten())
+                    # self.arduino.write(line_str.encode('utf-8'))
+                    self.z += 1
+                    self.start = False
+                # print(f"Line {z}: Length - {length}, First Coord - {line_coordinates_np[i][0]}, Last Coord - {line_coordinates_np[i][-1]}"
+        cv.polylines(image1, lines, isClosed=True, color=(255, 255, 255), thickness=2)
+        cv.polylines(image1, lines[:self.z], isClosed=True, color=(0, 255,0), thickness=2)
+        return image1
+
+    # def AImodel_prediction(self):
+    #     np.set_printoptions(suppress=True)
+    #     image = cv.imread('imagess/image_1.jpg')
+    #     image = cv.resize(image, (224, 224), interpolation=cv.INTER_AREA)
+    #     image = np.asarray(image, dtype=np.float32).reshape(1, 224, 224, 3)
+    #     image = (image / 127.5) - 1
+    #     prediction = self.model.predict(image)
+    #     index = np.argmax(prediction)
+    #     class_name = self.class_names[index]
+    #     confidence_score = prediction[0][index]
+    #     os.remove('imagess/image_1.jpg')
+    #     print("Class:", class_name[2:], end="")
+    #     print("Confidence Score:", str(np.round(confidence_score * 100))[:-2], "%")
+
+    def find_contours(self, image1, image2):
+        gray_image1 = cv.cvtColor(image1, cv.COLOR_BGR2GRAY)
+        gray_image2 = cv.cvtColor(image2, cv.COLOR_BGR2GRAY)
+        difference = cv.absdiff(gray_image2, gray_image1)
+        blur = cv.GaussianBlur(difference, (19, 19), cv.BORDER_DEFAULT)
+        _, thresh = cv.threshold(blur, self.threshvalue, 255, cv.THRESH_BINARY)
+        contours, _ = cv.findContours(thresh, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_NONE)
+        cv.drawContours(image1, contours, -1, (0, 0, 0), 5)
+        mask = np.zeros_like(image1)
+        cv.drawContours(mask, contours, -1, (255, 255, 255), thickness=cv.FILLED)
+        result = cv.bitwise_and(image1, mask)
+        return result,image1
+
+    def fillPolyTrans(self,img, points, color, opacity, line_thickness=2):
+        """
+        @param img: (mat) input image, where shape is drawn.
+        @param points: list [tuples(int, int) these are the points custom shape,FillPoly
+        @param color: (tuples (int, int, int)
+        @param opacity:  it is transparency of image.
+        @return: img(mat) image with rectangle draw.
+
+        """
+        list_to_np_array = np.array(points, dtype=np.int32) 
+        overlay = img.copy()  # coping the image
+        cv.fillPoly(overlay,[list_to_np_array], color )
+        new_img = cv.addWeighted(overlay, opacity, img, 1 - opacity, 0)
+        # print(points_list)
+        img = new_img
+        cv.polylines(img, [list_to_np_array], True, color,line_thickness, cv.LINE_AA)
+        return img
+
+    def detectQRcode(self,image):
+        # convert the color image to gray scale image
+        Gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
+
+        # create QR code object
+        objectQRcode = pyzbar.pyzbar.decode(Gray)
+        for obDecoded in objectQRcode: 
+            x, y, w, h =obDecoded.rect
+            # cv.rectangle(image, (x,y), (x+w, y+h), ORANGE, 4)
+            points = obDecoded.polygon
+            if len(points) > 4:
+                hull = cv.convexHull(
+                    np.array([points for point in points], dtype=np.float32))
+                hull = list(map(tuple, np.squeeze(hull)))
+            else:
+                hull = points
+
+            return hull
+    
+    def QRtrack(self,QR):
+        width, height = QR.shape[1], QR.shape[0]
+        square_width = width // 3
+        square_height = height // 3
+        qr_position = ""
+        for i in range(1, 3):
+            cv.line(QR, (i * square_width, 0), (i * square_width, height), (255, 0, 0), 1)
+            cv.line(QR, (0, i * square_height), (width, i * square_height), (255, 0, 0), 1)
+
+        img = QR.copy()
+        # img = cv.resize(img, None, fx=2, fy=2,interpolation=cv.INTER_CUBIC)
+        # cv.imshow('old frame ', self.old_gray)
+        # cv.imshow('img', img)
+
+        gray_frame = cv.cvtColor(QR, cv.COLOR_BGR2GRAY)
+        # display the image and wait for a keypress
+        hull_points =self.detectQRcode(QR)
+        # print(old_points.size)
+        stop_code=False
+        if hull_points:
+            pt1, pt2, pt3, pt4 = hull_points
+            self.qr_detected= True
+            stop_code=True
+            self.old_points = np.array([pt1, pt2, pt3, pt4], dtype=np.float32)
+            # frame =AiPhile.fillPolyTrans(frame, hull_points, AiPhile.MAGENTA, 0.4)
+            frame =self.fillPolyTrans(QR, hull_points, (255,0,255), 0.4)
+            cv.circle(QR, pt1, 3, (0,255,0), 3)
+            cv.circle(QR, pt2, 3, (255, 0, 0), 3)
+            cv.circle(QR, pt3, 3,(0,255,255), 3)
+            cv.circle(QR, pt4, 3, (0, 0, 255), 3)
+                    # Calculate QR diameter and center
+            qr_diameter = max(np.linalg.norm(np.array(hull_points[0]) - np.array(hull_points[2])),
+                            np.linalg.norm(np.array(hull_points[1]) - np.array(hull_points[3])))
+            qr_center_x = sum(point[0] for point in hull_points) // len(hull_points)
+            qr_center_y = sum(point[1] for point in hull_points) // len(hull_points)
+
+            # Display QR Diameter
+            cv.putText(QR, f"Diameter: {qr_diameter}", (10, 90), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv.LINE_AA)
+
+            # Middle coordinates of the frame
+            middle_x, middle_y = width // 2, height // 2
+
+            # Draw arrow from QR center to the middle of the grid
+            cv.arrowedLine(QR, (qr_center_x, qr_center_y), (middle_x, middle_y), (0, 255, 255), 2)
+
+            # Calculate the position of the QR code within the grid
+            qr_position = ""
+            if qr_center_x < square_width:
+                if qr_center_y < square_height:
+                    qr_position = "Top Left"
+                elif qr_center_y > 2 * square_height:
+                    qr_position = "Bottom Left"
+                else:
+                    qr_position = "Left"
+            elif qr_center_x > 2 * square_width:
+                if qr_center_y < square_height:
+                    qr_position = "Top Right"
+                elif qr_center_y > 2 * square_height:
+                    qr_position = "Bottom Right"
+                else:
+                    qr_position = "Right"
+            else:
+                if qr_center_y < square_height:
+                    qr_position = "Top"
+                elif qr_center_y > 2 * square_height:
+                    qr_position = "Bottom"
+                else:
+                    qr_position = "Center"
+            cv.putText(QR, f"QR Position: {qr_position}", (10, 120), cv.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2, cv.LINE_AA)
+            data_with_newline = qr_position + '\n'
+            # self.arduino.write(data_with_newline.encode('utf-8'))
+
+            # time.sleep(0.1)
+
+        if self.qr_detected and stop_code == False:
+            new_points, status, error = cv.calcOpticalFlowPyrLK(self.old_gray, gray_frame, self.old_points, None, **self.lk_params)
+            self.old_points = new_points
+            new_points = new_points.astype(int)
+            n = len(new_points)
+            QR = self.fillPolyTrans(QR, new_points, (0, 255, 0), 0.4)
+            cv.circle(QR, (new_points[0]), 3, (0, 255, 0), 2)
+
+            qr_diameter = max(np.linalg.norm(np.array(new_points[0]) - np.array(new_points[-1])),
+                            np.linalg.norm(np.array(new_points[n // 2]) - np.array(new_points[n // 2 - 1])))
+            qr_center_x = sum(point[0] for point in new_points) // len(new_points)
+            qr_center_y = sum(point[1] for point in new_points) // len(new_points)
+
+            cv.putText(QR, f"Diameter (Optical Flow): {qr_diameter}", (10, 150), cv.FONT_HERSHEY_SIMPLEX, 1,
+                    (0, 255, 0), 2, cv.LINE_AA)
+
+            middle_x, middle_y = width // 2, height // 2
+            cv.arrowedLine(QR, (qr_center_x, qr_center_y), (middle_x, middle_y), (0, 255, 255), 2)
+
+            qr_position = ""
+            if qr_center_x < square_width:
+                if qr_center_y < square_height:
+                    qr_position = "Top Left"
+                elif qr_center_y > 2 * square_height:
+                    qr_position = "Bottom Left"
+                else:
+                    qr_position = "Left"
+            elif qr_center_x > 2 * square_width:
+                if qr_center_y < square_height:
+                    qr_position = "Top Right"
+                elif qr_center_y > 2 * square_height:
+                    qr_position = "Bottom Right"
+                else:
+                    qr_position = "Right"
+            else:
+                if qr_center_y < square_height:
+                    qr_position = "Top"
+                elif qr_center_y > 2 * square_height:
+                    qr_position = "Bottom"
+                else:
+                    qr_position = "Center"
+            cv.putText(QR, f"QR Position: {qr_position}", (10, 120), cv.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2, cv.LINE_AA)
+            data_with_newline = qr_position + '\n'
+            # self.arduino.write(data_with_newline.encode('utf-8'))
+
+        self.old_gray = gray_frame.copy()
+        return QR, qr_position
+
+App = QApplication(sys.argv)
+window = Window()
+sys.exit(App.exec_())
