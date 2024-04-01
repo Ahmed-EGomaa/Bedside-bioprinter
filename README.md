@@ -1,4 +1,4 @@
-# **<p align="center"> Hamakey-V2, Beside Bio-Printing.</p>**
+# **<p align="center"> Hamakey-v2, Beside Bio-Printing.</p>**
 
 ## <p align="center"> RDI  Beside Bio-Printer. </p>
 
@@ -39,8 +39,5 @@ Hamakey-V2 is an open-source project, inviting collaboration and contributions f
 ## **<p align="center">  Get Started Today: </p>**
 Visit our GitHub repository, explore the code, and join the Hamakey-V2 community. Together, let's advance healthcare and redefine the future of bedside bioprinting!
 
-
-
-[Link to video]()
-
+## Link to video: https://youtu.be/r_owVYsQtQQ
 
