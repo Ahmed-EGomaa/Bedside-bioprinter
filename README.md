@@ -40,4 +40,5 @@ Hamakey-V2 is an open-source project, inviting collaboration and contributions f
 Visit our GitHub repository, explore the code, and join the Hamakey-V2 community. Together, let's advance healthcare and redefine the future of bedside bioprinting!
 
 ## Link to video: https://youtu.be/r_owVYsQtQQ
-
+## Link to Pre-print:
+## Link to designs:
